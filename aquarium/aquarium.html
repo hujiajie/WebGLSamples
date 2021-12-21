@@ -139,6 +139,91 @@ CANVAS {
 </div>
 <div id="msgContainer"></div>
 </body>
+<script id="fishPerVertexShader" type="text/something-not-javascript">
+attribute vec2 position;
+attribute float index;
+attribute float radius;
+attribute float radiusRange;
+attribute float speed;
+attribute float speedRange;
+attribute float tailSpeed;
+attribute float heightOffset;
+attribute float heightRange;
+uniform float clock;
+uniform float fishTailSpeed;
+uniform float fishHeight;
+uniform float fishHeightRange;
+uniform vec3 fishClock;
+varying vec2 v_texCoord;
+varying float v_index;
+varying float v_clock;
+varying float v_fishRadius;
+varying float v_fishRadiusRange;
+varying float v_fishSpeed;
+varying float v_fishSpeedRange;
+varying float v_fishTailSpeed;
+varying float v_fishHeight;
+varying float v_fishHeightRange;
+varying vec3 v_fishClock;
+void main() {
+  v_texCoord = position * 0.5 + 0.5;
+  v_index = index;
+  v_clock = clock;
+  v_fishRadius = radius;
+  v_fishRadiusRange = radiusRange;
+  v_fishSpeed = speed;
+  v_fishSpeedRange = speedRange;
+  v_fishTailSpeed = tailSpeed * fishTailSpeed;
+  v_fishHeight = fishHeight + heightOffset;
+  v_fishHeightRange = fishHeightRange * heightRange;
+  v_fishClock = fishClock;
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+</script>
+<script id="fishPerFragmentShader" type="text/something-not-javascript">
+#extension GL_EXT_draw_buffers : require
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+  precision highp float;
+#else
+  precision mediump float;
+#endif
+
+uniform float fishSpeed;
+uniform float fishOffset;
+uniform float tailOffsetMult;
+uniform sampler2D fishSpeedCoefficientMap;
+uniform sampler2D fishScaleCoefficientMap;
+uniform sampler2D fishRadiusCoefficientMap;
+varying vec2 v_texCoord;
+varying float v_index;
+varying float v_clock;
+varying float v_fishRadius;
+varying float v_fishRadiusRange;
+varying float v_fishSpeed;
+varying float v_fishSpeedRange;
+varying float v_fishTailSpeed;
+varying float v_fishHeight;
+varying float v_fishHeightRange;
+varying vec3 v_fishClock;
+void main() {
+  float fishBaseClock = v_clock * fishSpeed;
+  float fishClockSpeed = fishSpeed;
+  float fishClock = fishBaseClock + floor(v_index) * fishOffset;
+  float speed = v_fishSpeed + texture2D(fishSpeedCoefficientMap, v_texCoord).x * v_fishSpeedRange;
+  float scale = 1.0 + texture2D(fishScaleCoefficientMap, v_texCoord).x * 1.0;
+  vec3 radius = vec3(v_fishRadius, 2.0, v_fishRadius) +
+      texture2D(fishRadiusCoefficientMap, v_texCoord).xyz * vec3(v_fishRadiusRange, v_fishHeightRange, v_fishRadiusRange);
+  float fishSpeedClock = fishClock * speed;
+  vec3 clock = fishSpeedClock * v_fishClock;
+  vec3 fishPosition = sin(clock + vec3(0, 0, radians(90.0))) * radius + vec3(0, v_fishHeight, 0);
+  vec3 fishNextPosition = sin(clock - vec3(0.04, 0.01, 0.04) + vec3(0, 0, radians(90.0))) * radius + vec3(0, v_fishHeight, 0);
+  gl_FragData[0] = vec4(fishPosition, 1.0);
+  gl_FragData[1] = vec4(fishNextPosition, 1.0);
+  gl_FragData[2] = vec4(vec3(scale), 1.0);
+  gl_FragData[3] = vec4(vec3(mod((v_clock + float(int(v_index)) * tailOffsetMult) * v_fishTailSpeed * speed, radians(360.0))), 1.0);
+}
+</script>
 <script id="texVertexShader" type="text/something-not-javascript">
 attribute vec4 position;
 attribute vec2 texCoord;
@@ -187,10 +272,15 @@ void main() {
 uniform vec3 lightWorldPos;
 uniform mat4 viewInverse;
 uniform mat4 viewProjection;
-uniform vec3 worldPosition;
-uniform vec3 nextPosition;
-uniform float scale;
-uniform float time;
+uniform vec3 worldPosition;  // #noGpuOffloading
+uniform vec3 nextPosition;  // #noGpuOffloading
+uniform float scale;  // #noGpuOffloading
+uniform float time;  // #noGpuOffloading
+uniform vec2 texCoordForFishPer;  // #gpuOffloading
+uniform sampler2D worldPositionMap;  // #gpuOffloading
+uniform sampler2D nextPositionMap;  // #gpuOffloading
+uniform sampler2D scaleMap;  // #gpuOffloading
+uniform sampler2D timeMap;  // #gpuOffloading
 uniform float fishLength;
 uniform float fishWaveLength;
 uniform float fishBendAmount;
@@ -207,6 +297,10 @@ varying vec3 v_normal;
 varying vec3 v_surfaceToLight;
 varying vec3 v_surfaceToView;
 void main() {
+  vec3 worldPosition = texture2D(worldPositionMap, texCoordForFishPer).xyz;  // #gpuOffloading
+  vec3 nextPosition = texture2D(nextPositionMap, texCoordForFishPer).xyz;  // #gpuOffloading
+  float scale = texture2D(scaleMap, texCoordForFishPer).x;  // #gpuOffloading
+  float time = texture2D(timeMap, texCoordForFishPer).x;  // #gpuOffloading
   vec3 vz = normalize(worldPosition - nextPosition);
   vec3 vx = normalize(cross(vec3(0,1,0), vz));
   vec3 vy = cross(vz, vx);

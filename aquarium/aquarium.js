@@ -16,7 +16,123 @@ tdl.require('tdl.sync');
 tdl.require('tdl.textures');
 tdl.require('tdl.webgl');
 
+var debugVertexShaderSource = `attribute vec2 aPos;
+varying vec2 vTexCoord;
+
+void main() {
+  vTexCoord = (aPos + 1.0) * 0.5;
+  gl_Position = vec4(aPos, 0, 1.0);
+}
+`;
+var debugVertexShader;
+var debugFragmentShaderSource = `precision mediump float;
+
+varying vec2 vTexCoord;
+uniform sampler2D uSampler;
+
+void main() {
+  gl_FragColor = texture2D(uSampler, vTexCoord);
+}`;
+var debugFragmentShader;
+var debugProgram;
+var debugArrayBufferData = new Float32Array([
+  -1, -1,
+   1, -1,
+  -1,  1,
+   1,  1,
+  -1,  1,
+   1, -1,
+]);
+var debugArrayBuffer;
+
+function debugDraw(texture, x, y, w, h) {
+  var oldProgram = gl.getParameter(gl.CURRENT_PROGRAM);
+  var oldViewport = gl.getParameter(gl.VIEWPORT);
+  var oldColorWriteMask = gl.getParameter(gl.COLOR_WRITEMASK);
+  var oldDepthTestCap = gl.getParameter(gl.DEPTH_TEST);
+  var oldBlendCap = gl.getParameter(gl.BLEND);
+  var oldArrayBuffer = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+  var oldVertexAttribArrayEnabled = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_ENABLED);
+  var oldVertexAttribArrayBufferBinding;
+  var oldVertexAttribArraySize;
+  var oldVertexAttribArrayType;
+  var oldVertexAttribArrayNormalized;
+  var oldVertexAttribArrayStride;
+  var oldVertexAttribArrayPointer;
+  if (oldVertexAttribArrayEnabled) {
+    oldVertexAttribArrayBufferBinding = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
+    oldVertexAttribArraySize = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_SIZE);
+    oldVertexAttribArrayType = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_TYPE);
+    oldVertexAttribArrayNormalized = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_NORMALIZED);
+    oldVertexAttribArrayStride = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_STRIDE);
+    oldVertexAttribArrayPointer = gl.getVertexAttribOffset(0, gl.VERTEX_ATTRIB_ARRAY_POINTER);
+  }
+  var oldActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
+  var oldTexture = gl.getParameter(gl.TEXTURE_BINDING_2D);
+
+  gl.useProgram(debugProgram);
+  gl.viewport(x, y, w, h);
+  gl.colorMask(true, true, true, true);
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+  gl.bindBuffer(gl.ARRAY_BUFFER, debugArrayBuffer);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  var loc = gl.getUniformLocation(debugProgram, "uSampler");
+  gl.uniform1i(loc, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  gl.useProgram(oldProgram);
+  gl.viewport.apply(gl, oldViewport);
+  gl.colorMask.apply(gl, oldColorWriteMask);
+  oldDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
+  oldBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
+  if (oldVertexAttribArrayEnabled) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, oldVertexAttribArrayBufferBinding);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0,
+                           oldVertexAttribArraySize,
+                           oldVertexAttribArrayType,
+                           oldVertexAttribArrayNormalized,
+                           oldVertexAttribArrayStride,
+                           oldVertexAttribArrayPointer);
+  } else {
+    gl.disableVertexAttribArray(0);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, oldArrayBuffer);
+  gl.activeTexture(oldActiveTexture);
+  gl.bindTexture(gl.TEXTURE_2D, oldTexture);
+}
+
 const g_query = parseQueryString(window.location.search);
+
+function isGpuOffloadingSupportEnabled() {
+  return g_query.enableGpuOffloading && g_query.enableGpuOffloading == 'true';
+}
+
+if (isGpuOffloadingSupportEnabled()) {
+  g.options.useGpuOffloading = { enabled: true, text: 'Use GPU Offloading'};
+}
+
+function useGpuOffloading() {
+  if (typeof WebGLRenderingContext !== 'undefined' &&
+      gl instanceof WebGLRenderingContext &&
+      textureFloat &&
+      colorBufferFloat &&
+      drawBuffers &&
+      g.options.useGpuOffloading.enabled) {
+    return true;
+  }
+  if (typeof WebGL2RenderingContext !== 'undefined' &&
+      gl instanceof WebGL2RenderingContext &&
+      colorBufferFloat &&
+      g.options.useGpuOffloading.enabled) {
+    return true;
+  }
+  return false;
+}
 
 function isMultiviewSupportEnabled() {
   return g_aquariumConfig.enableVR && g_query.enableMultiview && g_query.enableMultiview == 'true';
@@ -32,6 +148,9 @@ function useMultiviewForStereo() {
 
 // globals
 var gl;                   // the gl context.
+var textureFloat;
+var colorBufferFloat;
+var drawBuffers;
 var multiview;            // multiview extension.
 var canvas;               // the canvas
 var math;                 // the math lib.
@@ -45,6 +164,27 @@ var g_scenes = {};  // each of the models
 var g_sceneGroups = {};  // the placement of the models
 var g_fog = true;
 var g_numFish = [1, 100, 500, 1000, 5000, 10000, 15000, 20000, 25000, 30000];
+
+var g_fishPerFbAttachmentsNeedUpdate = false;
+var g_fishPerFb;
+var g_fishPerFbWidth = 0;
+var g_fishPerFbHeight = 0;
+var g_fishPositionMap;
+var g_fishNextPositionMap;
+var g_fishScaleMap;
+var g_fishTimeMap;
+var g_fishInfoBuffer;
+var g_fishPerProgram;
+var g_fishSpeedCoefficientMap;
+var g_fishScaleCoefficientMap;
+var g_fishRadiusCoefficientMap;
+
+var g_randsNeedUpdate = false;
+var g_fishSpeedCoefficients;
+var g_fishScaleCoefficients;
+var g_fishXRadiusCoefficients;
+var g_fishYRadiusCoefficients;
+var g_fishZRadiusCoefficients;
 
 var g_stereoDemoActive = false;
 var g_shadersNeedUpdate = false; // Set to true whenever the state has changed so that shaders may need to be changed.
@@ -497,9 +637,11 @@ function createProgramFromTags(
     fog,
     opt_reflection,
     opt_normalMaps,
+    opt_gpuOffloading,
     opt_multiview) {
   opt_reflection = (opt_reflection === undefined) ? true : opt_reflection;
   opt_normalMaps = (opt_normalMaps === undefined) ? true : opt_normalMaps;
+  opt_gpuOffloading = (opt_gpuOffloading == undefined) ? false : opt_gpuOffloading;
   opt_multiview = (opt_multiview === undefined) ? false : opt_multiview;
 
   var fogUniforms = '' +
@@ -531,6 +673,12 @@ function createProgramFromTags(
 
   var vs = getScriptText(vertexTagId);
 
+  if (opt_gpuOffloading) {
+    vs = vs.replace(/^.*?\/\/ #noGpuOffloading$/gm, "");
+  } else {
+    vs = vs.replace(/^.*?\/\/ #gpuOffloading/gm, "");
+  }
+
   if (multiview) {
     // Replace shader code to get ESSL3 shader code and enable multiview (huge hack, do not do this at home kids)
 
@@ -558,10 +706,21 @@ function createProgramFromTags(
     if (opt_multiview) {
         fsPrefix.push("#extension GL_OVR_multiview2 : require");
     }
-    fsPrefix.push("out mediump vec4 my_FragColor;");
+    if (/gl_FragColor/.test(fs)) {
+      fsPrefix.push("out mediump vec4 my_FragColor;");
+      fs = fs.replace(/gl_FragColor/g, 'my_FragColor');
+    }
+    if (/gl_FragData/.test(fs)) {
+      fsPrefix.push("#ifdef GL_FRAGMENT_PRECISION_HIGH");
+      fsPrefix.push("  out highp vec4 my_FragData[gl_MaxDrawBuffers];");
+      fsPrefix.push("#else");
+      fsPrefix.push("  out mediump vec4 my_FragData[gl_MaxDrawBuffers];");
+      fsPrefix.push("#endif");
+      fs = fs.replace(/#extension\s+GL_EXT_draw_buffers\s*:\s*require/g, '');
+      fs = fs.replace(/gl_FragData/g, 'my_FragData');
+    }
     fs = fsPrefix.join('\n') + fs;
     fs = fs.replace(/varying/g, 'in');
-    fs = fs.replace(/gl_FragColor/g, 'my_FragColor');
 
     vs = vs.replace(/textureCube\(/g, 'texture(');
     vs = vs.replace(/texture2D\(/g, 'texture(');
@@ -612,6 +771,9 @@ ProgramSet.prototype.getKey = function(shadingSettings) {
   if (shadingSettings.normalMap) {
     key += 'Normalmap';
   }
+  if (shadingSettings.gpuOffloading) {
+    key += 'Gpuoffloading';
+  }
   if (shadingSettings.multiview) {
     key += 'Multiview';
   }
@@ -622,7 +784,14 @@ ProgramSet.prototype.getProgram = function(shadingSettings) {
   var key = this.getKey(shadingSettings);
   if (!this.cache.hasOwnProperty(key)) {
     var fog = this.fogMask && shadingSettings.fog;
-    this.cache[key] = createProgramFromTags(this.vsId, this.fsId, fog, shadingSettings.reflection, shadingSettings.normalMap, shadingSettings.multiview);
+    this.cache[key] = createProgramFromTags(
+        this.vsId,
+        this.fsId,
+        fog,
+        shadingSettings.reflection,
+        shadingSettings.normalMap,
+        shadingSettings.gpuOffloading,
+        shadingSettings.multiview);
   }
   return this.cache[key];
 };
@@ -684,7 +853,13 @@ Scene.prototype.onload_ = function(data, exception) {
       }
 
       var programSet = new ProgramSet(vsId, fsId, this.fog);
-      var program = programSet.getProgram(getShadingSettings(false));
+      var enableGpuOffloading;
+      if (useGpuOffloading()) {
+        enableGpuOffloading = g_fishTable.some(fishInfo => g_scenes[fishInfo.name] === this && !(g.drawLasers && fishInfo.lasers));
+      } else {
+        enableGpuOffloading = false;
+      }
+      var program = programSet.getProgram(getShadingSettings(enableGpuOffloading, false));
 
       tdl.log(this.url, ": ", type);
       var model = new tdl.models.Model(program, arrays, textures);
@@ -695,11 +870,12 @@ Scene.prototype.onload_ = function(data, exception) {
   }
 };
 
-function getShadingSettings(enableMultiview) {
+function getShadingSettings(enableGpuOffloading, enableMultiview) {
   return {
     fog: g.options.fog.enabled,
     reflection: g.options.reflection.enabled,
     normalMap: g.options.normalMaps.enabled,
+    gpuOffloading: enableGpuOffloading,
     multiview: enableMultiview
   };
 }
@@ -775,7 +951,7 @@ function setupLaser() {
       beam2Arrays,
       beam3Arrays]);
   var programSet = new ProgramSet('laserVertexShader', 'laserFragmentShader', false);
-  var program = programSet.getProgram(getShadingSettings(false));
+  var program = programSet.getProgram(getShadingSettings(false, false));
   var model = new tdl.models.Model(program, arrays, textures);
   model.programSet = programSet;
   return model;
@@ -799,7 +975,7 @@ function setupLightRay() {
        0, 0.5, 0, 1]);
   delete arrays.normal;
   var programSet = new ProgramSet('texVertexShader', 'texFragmentShader', false);
-  var program = programSet.getProgram(getShadingSettings(false));
+  var program = programSet.getProgram(getShadingSettings(false, false));
   var model = new tdl.models.Model(program, arrays, textures);
   model.programSet = programSet;
   return model;
@@ -891,9 +1067,40 @@ function main() {
   if (!gl) {
     return false;
   }
+  if (isGpuOffloadingSupportEnabled()) {
+    textureFloat = gl.getExtension('OES_texture_float');
+    colorBufferFloat = gl.getExtension('WEBGL_color_buffer_float') || gl.getExtension('EXT_color_buffer_float');
+    drawBuffers = gl.getExtension('WEBGL_draw_buffers');
+    gl.texImage2D = function() {
+      var args = Array.from(arguments);
+      if (args[2] == gl.RED && args[6] == gl.RED && args[7] == gl.FLOAT && gl.R32F) {
+        args[2] = gl.R32F;
+      }
+      if (args[2] == gl.RGB && args[6] == gl.RGB && args[7] == gl.FLOAT && gl.RGB32F) {
+        args[2] = gl.RGB32F;
+      }
+      if (args[2] == gl.RGBA && args[6] == gl.RGBA && args[7] == gl.FLOAT && gl.RGBA32F) {
+        args[2] = gl.RGBA32F;
+      }
+      Object.getPrototypeOf(this).texImage2D.apply(this, args);
+    }
+  }
   if (g_debug) {
     gl = tdl.webgl.makeDebugContext(gl, undefined, LogGLCall);
   }
+  debugVertexShader = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(debugVertexShader, debugVertexShaderSource);
+  gl.compileShader(debugVertexShader);
+  debugFragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(debugFragmentShader, debugFragmentShaderSource);
+  gl.compileShader(debugFragmentShader);
+  debugProgram = gl.createProgram();
+  gl.attachShader(debugProgram, debugVertexShader);
+  gl.attachShader(debugProgram, debugFragmentShader);
+  gl.linkProgram(debugProgram);
+  debugArrayBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, debugArrayBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, debugArrayBufferData, gl.STATIC_DRAW);
 
   initialize();
 }
@@ -1131,11 +1338,7 @@ function initialize() {
     specularFactor: 0.3,
     ambient: ambient};
   var fishConstMultiview = createMultiviewConst(fishConst);
-
-  var fishPer = {
-    worldPosition: new Float32Array(3), //[0,0,0],
-    nextPosition: new Float32Array(3), //[0,0,0],
-    scale: 1};
+  var fishPer;
 
   // lightRay uniforms.
   var lightRayConst = {
@@ -1186,6 +1389,43 @@ function initialize() {
   }
 
   initUIStuff();
+  if (useGpuOffloading()) {
+    g_fishPerFb = gl.createFramebuffer();
+    g_fishInfoBuffer = gl.createBuffer();
+
+    var rects = initFishPerFbAttachments();
+    var vertices = [];
+    g_fishTable.filter(fishInfo => !(g.drawLasers && fishInfo.lasers)).forEach(fishInfo => {
+      var rect = rects.shift();
+      var w = 1 << rect.log2SizeX;
+      var h = rect.sizeY;
+      var x0 = (rect.offsetX + 0) / g_fishPerFbWidth * 2 - 1;
+      var x1 = (rect.offsetX + w) / g_fishPerFbWidth * 2 - 1;
+      var y0 = (rect.offsetY + 0) / g_fishPerFbHeight * 2 - 1;
+      var y1 = (rect.offsetY + h) / g_fishPerFbHeight * 2 - 1;
+      fishInfo.offloadGrid = rect;
+      vertices.push([x0, y0, (0 - 0.5) * w]);
+      vertices.push([x1, y0, (0 + 0.5) * w]);
+      vertices.push([x0, y1, (h - 0.5) * w]);
+      vertices.push([x1, y1, (h + 0.5) * w]);
+      vertices.push([x0, y1, (h - 0.5) * w]);
+      vertices.push([x1, y0, (0 + 0.5) * w]);
+      for (var ii = vertices.length - 6; ii < vertices.length; ++ii) {
+        vertices[ii].push(fishInfo.radius);
+        vertices[ii].push(fishInfo.radiusRange);
+        vertices[ii].push(fishInfo.speed);
+        vertices[ii].push(fishInfo.speedRange);
+        vertices[ii].push(fishInfo.tailSpeed);
+        vertices[ii].push(fishInfo.heightOffset);
+        vertices[ii].push(fishInfo.heightRange);
+      }
+    });
+    gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([].concat.apply([], vertices)), gl.STATIC_DRAW);
+
+    g_fishPerProgram = createProgramFromTags('fishPerVertexShader', 'fishPerFragmentShader');
+  }
+  initRands();
   initializeCommon();
 
   var frameCount = 0;
@@ -1228,8 +1468,14 @@ function initialize() {
   }
 
   function setShaders(enableMultiview) {
-    var shadingSettings = getShadingSettings(enableMultiview);
     for (var sceneName in g_scenes) {
+      var enableGpuOffloading;
+      if (useGpuOffloading()) {
+        enableGpuOffloading = g_fishTable.some(fishInfo => fishInfo.name == sceneName && !(g.drawLasers && fishInfo.lasers));
+      } else {
+        enableGpuOffloading = false;
+      }
+      var shadingSettings = getShadingSettings(enableGpuOffloading, enableMultiview);
       var scene = g_scenes[sceneName];
       var models = scene.models;
       var numModels = models.length;
@@ -1309,9 +1555,6 @@ function initialize() {
     gl.blendEquation(gl.FUNC_ADD);
     gl.enable(gl.CULL_FACE);
 
-    math.resetPseudoRandom();
-    var pseudoRandom = math.pseudoRandom;
-
     gl.depthMask(true);
 
     innerConstInUse.eta = g.innerConst.eta;
@@ -1349,7 +1592,113 @@ function initialize() {
     Log("--Draw Fish---------------------------------------");
 
     gl.enable(gl.BLEND);
-    for (var ff = 0; ff < g_fishTable.length; ++ff) {
+    if (g_fishPerFbAttachmentsNeedUpdate) {
+      var rects = initFishPerFbAttachments();
+      var vertices = [];
+      g_fishTable.filter(fishInfo => !(g.drawLasers && fishInfo.lasers)).forEach(fishInfo => {
+        var rect = rects.shift();
+        var w = 1 << rect.log2SizeX;
+        var h = rect.sizeY;
+        var x0 = (rect.offsetX + 0) / g_fishPerFbWidth * 2 - 1;
+        var x1 = (rect.offsetX + w) / g_fishPerFbWidth * 2 - 1;
+        var y0 = (rect.offsetY + 0) / g_fishPerFbHeight * 2 - 1;
+        var y1 = (rect.offsetY + h) / g_fishPerFbHeight * 2 - 1;
+        fishInfo.offloadGrid = rect;
+        vertices.push([x0, y0, (0 - 0.5) * w]);
+        vertices.push([x1, y0, (0 + 0.5) * w]);
+        vertices.push([x0, y1, (h - 0.5) * w]);
+        vertices.push([x1, y1, (h + 0.5) * w]);
+        vertices.push([x0, y1, (h - 0.5) * w]);
+        vertices.push([x1, y0, (0 + 0.5) * w]);
+        for (var ii = vertices.length - 6; ii < vertices.length; ++ii) {
+          vertices[ii].push(fishInfo.radius);
+          vertices[ii].push(fishInfo.radiusRange);
+          vertices[ii].push(fishInfo.speed);
+          vertices[ii].push(fishInfo.speedRange);
+          vertices[ii].push(fishInfo.tailSpeed);
+          vertices[ii].push(fishInfo.heightOffset);
+          vertices[ii].push(fishInfo.heightRange);
+        }
+      });
+      gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([].concat.apply([], vertices)), gl.STATIC_DRAW);
+      g_fishPerFbAttachmentsNeedUpdate = false;
+    }
+    if (g_randsNeedUpdate) {
+      initRands();
+      g_randsNeedUpdate = false;
+    }
+    if (useGpuOffloading()) {
+      var newDepthTestCap = false;
+      var newBlendCap = false;
+      var newScissorTestCap = false;
+      var newViewport = [0, 0, g_fishPerFbWidth, g_fishPerFbHeight];
+      var newFramebufferBinding = g_fishPerFb;
+
+      var oldDepthTestCap = gl.isEnabled(gl.DEPTH_TEST);
+      var oldBlendCap = gl.isEnabled(gl.BLEND);
+      var oldScissorTestCap = gl.isEnabled(gl.SCISSOR_TEST);
+      var oldViewport = gl.getParameter(gl.VIEWPORT);
+      var oldFramebufferBinding = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+
+      newDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
+      newBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
+      newScissorTestCap ? gl.enable(gl.SCISSOR_TEST) : gl.disable(gl.SCISSOR_TEST);
+      gl.viewport.apply(gl, newViewport);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, newFramebufferBinding);
+
+      var loc;
+      var f = g.fish;
+      gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
+      loc = g_fishPerProgram.attribLoc["position"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 40, 0);
+      loc = g_fishPerProgram.attribLoc["index"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 8);
+      loc = g_fishPerProgram.attribLoc["radius"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 12);
+      loc = g_fishPerProgram.attribLoc["radiusRange"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 16);
+      loc = g_fishPerProgram.attribLoc["speed"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 20);
+      loc = g_fishPerProgram.attribLoc["speedRange"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 24);
+      loc = g_fishPerProgram.attribLoc["tailSpeed"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 28);
+      loc = g_fishPerProgram.attribLoc["heightOffset"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 32);
+      loc = g_fishPerProgram.attribLoc["heightRange"];
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 40, 36);
+      g_fishPerProgram.use();
+      g_fishPerProgram.setUniform("clock", clock);
+      g_fishPerProgram.setUniform("fishTailSpeed", f.fishTailSpeed);
+      g_fishPerProgram.setUniform("fishHeight", f.fishHeight);
+      g_fishPerProgram.setUniform("fishHeightRange", f.fishHeightRange);
+      g_fishPerProgram.setUniform("fishClock", [f.fishXClock, f.fishYClock, f.fishZClock]);
+      g_fishPerProgram.setUniform("fishSpeed", f.fishSpeed);
+      g_fishPerProgram.setUniform("fishOffset", f.fishOffset);
+      g_fishPerProgram.setUniform("tailOffsetMult", g_tailOffsetMult);
+      g_fishPerProgram.setUniform("fishSpeedCoefficientMap", g_fishSpeedCoefficientMap);
+      g_fishPerProgram.setUniform("fishScaleCoefficientMap", g_fishScaleCoefficientMap);
+      g_fishPerProgram.setUniform("fishRadiusCoefficientMap", g_fishRadiusCoefficientMap);
+      var count = gl.getBufferParameter(gl.ARRAY_BUFFER, gl.BUFFER_SIZE) / 40;
+      gl.drawArrays(gl.TRIANGLES, 0, count);
+
+      oldDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
+      oldBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
+      oldScissorTestCap ? gl.enable(gl.SCISSOR_TEST) : gl.disable(gl.SCISSOR_TEST);
+      gl.viewport.apply(gl, oldViewport);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, oldFramebufferBinding);
+    }
+    for (var ff = 0, jj = 0; ff < g_fishTable.length; ++ff) {
       var fishInfo = g_fishTable[ff];
       var fishName = fishInfo.name;
       var numFish = fishInfo.num[g.globals.fishSetting];
@@ -1365,60 +1714,83 @@ function initialize() {
         for (var p in fishInfo.constUniforms) {
           fishConstInUse[p] = fishInfo.constUniforms[p];
         }
-        fish.drawPrep(fishConstInUse);
-        var fishBaseClock = clock * f.fishSpeed;
-        var fishRadius = fishInfo.radius;
-        var fishRadiusRange = fishInfo.radiusRange;
-        var fishSpeed = fishInfo.speed;
-        var fishSpeedRange = fishInfo.speedRange;
-        var fishTailSpeed = fishInfo.tailSpeed * f.fishTailSpeed;
-        var fishOffset = f.fishOffset;
-        var fishClockSpeed = f.fishSpeed;
-        var fishHeight = f.fishHeight + fishInfo.heightOffset;
-        var fishHeightRange = f.fishHeightRange * fishInfo.heightRange;
-        var fishXClock = f.fishXClock;
-        var fishYClock = f.fishYClock;
-        var fishZClock = f.fishZClock;
-        var fishPosition = fishPer.worldPosition;
-        var fishNextPosition = fishPer.nextPosition;
-        for (var ii = 0; ii < numFish; ++ii) {
-          var fishClock = fishBaseClock + ii * fishOffset;
-          var speed = fishSpeed + math.pseudoRandom() * fishSpeedRange;
-          var scale = 1.0 + math.pseudoRandom() * 1;
-          var xRadius = fishRadius + pseudoRandom() * fishRadiusRange;
-          var yRadius = 2.0 + pseudoRandom() * fishHeightRange;
-          var zRadius = fishRadius + pseudoRandom() * fishRadiusRange;
-          var fishSpeedClock = fishClock * speed;
-          var xClock = fishSpeedClock * fishXClock;
-          var yClock = fishSpeedClock * fishYClock;
-          var zClock = fishSpeedClock * fishZClock;
+        if (useGpuOffloading() && !(g.drawLasers && fishInfo.lasers)) {
+          fishConstInUse.worldPositionMap = g_fishPositionMap;
+          fishConstInUse.nextPositionMap = g_fishNextPositionMap;
+          fishConstInUse.scaleMap = g_fishScaleMap;
+          fishConstInUse.timeMap = g_fishTimeMap;
+          fishPer = {
+            texCoordForFishPer: new Float32Array(2),
+          };
+          fish.drawPrep(fishConstInUse);
+          for (var ii = 0; ii < numFish; ++ii) {
+            fishPer.texCoordForFishPer[0] = fishInfo.offloadGrid.offsetX + (ii & ((1 << fishInfo.offloadGrid.log2SizeX) - 1)) + 0.5;
+            fishPer.texCoordForFishPer[0] /= g_fishPerFbWidth;
+            fishPer.texCoordForFishPer[1] = fishInfo.offloadGrid.offsetY + (ii >> fishInfo.offloadGrid.log2SizeX) + 0.5;
+            fishPer.texCoordForFishPer[1] /= g_fishPerFbHeight;
+            fish.draw(fishPer);
+          }
+        } else {
+          fishPer = {
+            worldPosition: new Float32Array(3),
+            nextPosition: new Float32Array(3),
+            scale: 1,
+          };
+          fish.drawPrep(fishConstInUse);
+          var fishBaseClock = clock * f.fishSpeed;
+          var fishRadius = fishInfo.radius;
+          var fishRadiusRange = fishInfo.radiusRange;
+          var fishSpeed = fishInfo.speed;
+          var fishSpeedRange = fishInfo.speedRange;
+          var fishTailSpeed = fishInfo.tailSpeed * f.fishTailSpeed;
+          var fishOffset = f.fishOffset;
+          var fishClockSpeed = f.fishSpeed;
+          var fishHeight = f.fishHeight + fishInfo.heightOffset;
+          var fishHeightRange = f.fishHeightRange * fishInfo.heightRange;
+          var fishXClock = f.fishXClock;
+          var fishYClock = f.fishYClock;
+          var fishZClock = f.fishZClock;
+          var fishPosition = fishPer.worldPosition;
+          var fishNextPosition = fishPer.nextPosition;
+          for (var ii = 0; ii < numFish; ++ii, ++jj) {
+            var fishClock = fishBaseClock + ii * fishOffset;
+            var speed = fishSpeed + g_fishSpeedCoefficients[jj] * fishSpeedRange;
+            var scale = 1.0 + g_fishScaleCoefficients[jj] * 1;
+            var xRadius = fishRadius + g_fishXRadiusCoefficients[jj] * fishRadiusRange;
+            var yRadius = 2.0 + g_fishYRadiusCoefficients[jj] * fishHeightRange;
+            var zRadius = fishRadius + g_fishZRadiusCoefficients[jj] * fishRadiusRange;
+            var fishSpeedClock = fishClock * speed;
+            var xClock = fishSpeedClock * fishXClock;
+            var yClock = fishSpeedClock * fishYClock;
+            var zClock = fishSpeedClock * fishZClock;
 
-          fishPosition[0] = Math.sin(xClock) * xRadius;
-          fishPosition[1] = Math.sin(yClock) * yRadius + fishHeight;
-          fishPosition[2] = Math.cos(zClock) * zRadius;
-          fishNextPosition[0] = Math.sin(xClock - 0.04) * xRadius;
-          fishNextPosition[1] = Math.sin(yClock - 0.01) * yRadius + fishHeight;
-          fishNextPosition[2] = Math.cos(zClock - 0.04) * zRadius;
-          fishPer.scale = scale;
+            fishPosition[0] = Math.sin(xClock) * xRadius;
+            fishPosition[1] = Math.sin(yClock) * yRadius + fishHeight;
+            fishPosition[2] = Math.cos(zClock) * zRadius;
+            fishNextPosition[0] = Math.sin(xClock - 0.04) * xRadius;
+            fishNextPosition[1] = Math.sin(yClock - 0.01) * yRadius + fishHeight;
+            fishNextPosition[2] = Math.cos(zClock - 0.04) * zRadius;
+            fishPer.scale = scale;
 
-          fishPer.time =
-              ((clock + ii * g_tailOffsetMult) * fishTailSpeed * speed) %
-              (Math.PI * 2);
-          fish.draw(fishPer);
+            fishPer.time =
+                ((clock + ii * g_tailOffsetMult) * fishTailSpeed * speed) %
+                (Math.PI * 2);
+            fish.draw(fishPer);
 
-          if (g.drawLasers && fishInfo.lasers) {
-            fishInfo.fishData[ii] = {
-              position: [
-                  fishPosition[0],
-                  fishPosition[1],
-                  fishPosition[2]],
-              target: [
-                  fishNextPosition[0],
-                  fishNextPosition[1],
-                  fishNextPosition[2]],
-              scale: scale,
-              time: fishPer.time
-            };
+            if (g.drawLasers && fishInfo.lasers) {
+              fishInfo.fishData[ii] = {
+                position: [
+                    fishPosition[0],
+                    fishPosition[1],
+                    fishPosition[2]],
+                target: [
+                    fishNextPosition[0],
+                    fishNextPosition[1],
+                    fishNextPosition[2]],
+                scale: scale,
+                time: fishPer.time
+              };
+            }
           }
         }
       }
@@ -1922,6 +2294,10 @@ function setupCountButtons() {
     elem.onclick = function(elem, id) {
       return function () {
         setSetting(elem, id);
+        if (useGpuOffloading()) {
+          g_fishPerFbAttachmentsNeedUpdate = true;
+        }
+        g_randsNeedUpdate = true;
       }}(elem, ii);
   }
 
@@ -1952,6 +2328,10 @@ function initUIStuff() {
     options[name] = {enabled:!option.enabled};
     setSettings({options:options});
     elem.style.color = option.enabled ? "red" : "gray";
+    if (useGpuOffloading()) {
+      g_fishPerFbAttachmentsNeedUpdate = true;
+    }
+    g_randsNeedUpdate = true;
     g_shadersNeedUpdate = true;
   }
 
@@ -1976,6 +2356,175 @@ function initUIStuff() {
     div.onmousedown = function() { return false; };
     div.onstartselect = function() { return false; };
     optionsContainer.appendChild(div);
+  }
+}
+
+function packRectangles(dims) {
+  var coords = new Array(dims.length);
+  var totalSizeY = 0;
+  dims.forEach((dim, ndx) => {
+    coords[ndx] = {
+      offsetX: 0,
+      offsetY: totalSizeY,
+    };
+    totalSizeY += dim.sizeY;
+  });
+  return coords;
+}
+
+function initFishPerFbAttachments() {
+  var rects;
+
+  var dims = g_fishTable.filter(fishInfo => !(g.drawLasers && fishInfo.lasers)).map(fishInfo => {
+    var numType = fishInfo.num[g.globals.fishSetting];
+    var log2SizeX = (32 - Math.clz32(numType)) >> 1;
+    return {
+      log2SizeX: log2SizeX,
+      sizeY: ((numType - 1) >> log2SizeX) + 1,
+    };
+  });
+  var coords = packRectangles(dims.map(dim => ({
+    sizeX: 1 << dim.log2SizeX,
+    sizeY: dim.sizeY,
+  })));
+  rects = g_fishTable.map(() => Object.assign({}, dims.shift(), coords.shift())).filter(rect => Object.keys(rect).length);
+  g_fishPerFbWidth = Math.max.apply(null, rects.map(rect => rect.offsetX + (1 << rect.log2SizeX)));
+  g_fishPerFbHeight = Math.max.apply(null, rects.map(rect => rect.offsetY + rect.sizeY));
+
+  function createTexture() {
+    var texture = new tdl.textures.ColorTexture({
+      width: g_fishPerFbWidth,
+      height: g_fishPerFbHeight,
+    }, gl.RGBA, gl.FLOAT);
+    texture.setParameter(gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    texture.setParameter(gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    texture.setParameter(gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    texture.setParameter(gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return texture;
+  }
+
+  g_fishPositionMap = createTexture();
+  g_fishNextPositionMap = createTexture();
+  g_fishScaleMap = createTexture();
+  g_fishTimeMap = createTexture();
+
+  var buffers = [];
+  var framebufferBinding = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, g_fishPerFb);
+  if (drawBuffers) {
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, drawBuffers.COLOR_ATTACHMENT0_WEBGL, gl.TEXTURE_2D, g_fishPositionMap.texture, 0);
+    buffers.push(drawBuffers.COLOR_ATTACHMENT0_WEBGL);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, drawBuffers.COLOR_ATTACHMENT1_WEBGL, gl.TEXTURE_2D, g_fishNextPositionMap.texture, 0);
+    buffers.push(drawBuffers.COLOR_ATTACHMENT1_WEBGL);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, drawBuffers.COLOR_ATTACHMENT2_WEBGL, gl.TEXTURE_2D, g_fishScaleMap.texture, 0);
+    buffers.push(drawBuffers.COLOR_ATTACHMENT2_WEBGL);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, drawBuffers.COLOR_ATTACHMENT3_WEBGL, gl.TEXTURE_2D, g_fishTimeMap.texture, 0);
+    buffers.push(drawBuffers.COLOR_ATTACHMENT3_WEBGL);
+    drawBuffers.drawBuffersWEBGL(buffers);
+  } else {
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, g_fishPositionMap.texture, 0);
+    buffers.push(gl.COLOR_ATTACHMENT0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, g_fishNextPositionMap.texture, 0);
+    buffers.push(gl.COLOR_ATTACHMENT1);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, g_fishScaleMap.texture, 0);
+    buffers.push(gl.COLOR_ATTACHMENT2);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT3, gl.TEXTURE_2D, g_fishTimeMap.texture, 0);
+    buffers.push(gl.COLOR_ATTACHMENT3);
+    gl.drawBuffers(buffers);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebufferBinding);
+
+  return rects;
+}
+
+function initRands() {
+  if (useGpuOffloading()) {
+    g_fishSpeedCoefficientMap = new tdl.textures.ColorTexture({
+      width: g_fishPerFbWidth,
+      height: g_fishPerFbHeight,
+    }, gl.RED || gl.LUMINANCE, gl.FLOAT);
+    g_fishSpeedCoefficientMap.setParameter(gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    g_fishSpeedCoefficientMap.setParameter(gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    g_fishSpeedCoefficientMap.setParameter(gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    g_fishSpeedCoefficientMap.setParameter(gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    g_fishScaleCoefficientMap = new tdl.textures.ColorTexture({
+      width: g_fishPerFbWidth,
+      height: g_fishPerFbHeight,
+    }, gl.RED || gl.LUMINANCE, gl.FLOAT);
+    g_fishScaleCoefficientMap.setParameter(gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    g_fishScaleCoefficientMap.setParameter(gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    g_fishScaleCoefficientMap.setParameter(gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    g_fishScaleCoefficientMap.setParameter(gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    g_fishRadiusCoefficientMap = new tdl.textures.ColorTexture({
+      width: g_fishPerFbWidth,
+      height: g_fishPerFbHeight,
+    }, gl.RGB, gl.FLOAT);
+    g_fishRadiusCoefficientMap.setParameter(gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    g_fishRadiusCoefficientMap.setParameter(gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    g_fishRadiusCoefficientMap.setParameter(gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    g_fishRadiusCoefficientMap.setParameter(gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  var numCoef;
+  if (useGpuOffloading()) {
+    numCoef = 0;
+    g_fishTable.filter(fishInfo => g.drawLasers && fishInfo.lasers).forEach(fishInfo => {
+      numCoef += fishInfo.num[g.globals.fishSetting];
+    });
+  } else {
+    numCoef = g_numFish[g.globals.fishSetting];
+  }
+  g_fishSpeedCoefficients = new Array(numCoef);
+  g_fishScaleCoefficients = new Array(numCoef);
+  g_fishXRadiusCoefficients = new Array(numCoef);
+  g_fishYRadiusCoefficients = new Array(numCoef);
+  g_fishZRadiusCoefficients = new Array(numCoef);
+
+  math.resetPseudoRandom();
+
+  for (var ff = 0, jj = 0; ff < g_fishTable.length; ++ff) {
+    var fishInfo = g_fishTable[ff];
+    var numFish = fishInfo.num[g.globals.fishSetting];
+    if (useGpuOffloading() && !(g.drawLasers && fishInfo.lasers)) {
+      var offsetX = fishInfo.offloadGrid.offsetX;
+      var offsetY = fishInfo.offloadGrid.offsetY;
+      var sizeX = 1 << fishInfo.offloadGrid.log2SizeX;
+      var sizeY = fishInfo.offloadGrid.sizeY;
+      var fishSpeedCoefficients = new Float32Array(sizeX * sizeY);
+      var fishScaleCoefficients = new Float32Array(sizeX * sizeY);
+      var fishRadiusCoefficients = new Float32Array(sizeX * sizeY * 3);
+      for (var ii = 0; ii < numFish; ++ii) {
+        fishSpeedCoefficients[ii] = math.pseudoRandom();
+        fishScaleCoefficients[ii] = math.pseudoRandom();
+        fishRadiusCoefficients[ii * 3 + 0] = math.pseudoRandom();
+        fishRadiusCoefficients[ii * 3 + 1] = math.pseudoRandom();
+        fishRadiusCoefficients[ii * 3 + 2] = math.pseudoRandom();
+      }
+
+      var format;
+      var type;
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      g_fishSpeedCoefficientMap.bindToUnit(0);
+      format = g_fishSpeedCoefficientMap.format;
+      type = g_fishSpeedCoefficientMap.type;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY, sizeX, sizeY, format, type, fishSpeedCoefficients);
+      g_fishScaleCoefficientMap.bindToUnit(0);
+      format = g_fishScaleCoefficientMap.format;
+      type = g_fishScaleCoefficientMap.type;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY, sizeX, sizeY, format, type, fishScaleCoefficients);
+      g_fishRadiusCoefficientMap.bindToUnit(0);
+      format = g_fishRadiusCoefficientMap.format;
+      type = g_fishRadiusCoefficientMap.type;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, offsetX, offsetY, sizeX, sizeY, format, type, fishRadiusCoefficients);
+    } else {
+      for (var ii = 0; ii < numFish; ++ii, ++jj) {
+        g_fishSpeedCoefficients[jj] = math.pseudoRandom();
+        g_fishScaleCoefficients[jj] = math.pseudoRandom();
+        g_fishXRadiusCoefficients[jj] = math.pseudoRandom();
+        g_fishYRadiusCoefficients[jj] = math.pseudoRandom();
+        g_fishZRadiusCoefficients[jj] = math.pseudoRandom();
+      }
+    }
   }
 }
 
@@ -2024,6 +2573,11 @@ $(function(){
       if (event.which == 'l'.charCodeAt(0) ||
           event.which == 'L'.charCodeAt(0)) {
         setSettings({drawLasers: !g.drawLasers});
+        if (useGpuOffloading()) {
+          g_fishPerFbAttachmentsNeedUpdate = true;
+        }
+        g_randsNeedUpdate = true;
+        g_shadersNeedUpdate = true;
       } else if (event.which == ' '.charCodeAt(0)) {
         advanceViewSettings();
       } else if (event.which == 's'.charCodeAt(0) ||
