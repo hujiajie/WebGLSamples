@@ -16,96 +16,6 @@ tdl.require('tdl.sync');
 tdl.require('tdl.textures');
 tdl.require('tdl.webgl');
 
-var debugVertexShaderSource = `attribute vec2 aPos;
-varying vec2 vTexCoord;
-
-void main() {
-  vTexCoord = (aPos + 1.0) * 0.5;
-  gl_Position = vec4(aPos, 0, 1.0);
-}
-`;
-var debugVertexShader;
-var debugFragmentShaderSource = `precision mediump float;
-
-varying vec2 vTexCoord;
-uniform sampler2D uSampler;
-
-void main() {
-  gl_FragColor = texture2D(uSampler, vTexCoord);
-}`;
-var debugFragmentShader;
-var debugProgram;
-var debugArrayBufferData = new Float32Array([
-  -1, -1,
-   1, -1,
-  -1,  1,
-   1,  1,
-  -1,  1,
-   1, -1,
-]);
-var debugArrayBuffer;
-
-function debugDraw(texture, x, y, w, h) {
-  var oldProgram = gl.getParameter(gl.CURRENT_PROGRAM);
-  var oldViewport = gl.getParameter(gl.VIEWPORT);
-  var oldColorWriteMask = gl.getParameter(gl.COLOR_WRITEMASK);
-  var oldDepthTestCap = gl.getParameter(gl.DEPTH_TEST);
-  var oldBlendCap = gl.getParameter(gl.BLEND);
-  var oldArrayBuffer = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
-  var oldVertexAttribArrayEnabled = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_ENABLED);
-  var oldVertexAttribArrayBufferBinding;
-  var oldVertexAttribArraySize;
-  var oldVertexAttribArrayType;
-  var oldVertexAttribArrayNormalized;
-  var oldVertexAttribArrayStride;
-  var oldVertexAttribArrayPointer;
-  if (oldVertexAttribArrayEnabled) {
-    oldVertexAttribArrayBufferBinding = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING);
-    oldVertexAttribArraySize = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_SIZE);
-    oldVertexAttribArrayType = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_TYPE);
-    oldVertexAttribArrayNormalized = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_NORMALIZED);
-    oldVertexAttribArrayStride = gl.getVertexAttrib(0, gl.VERTEX_ATTRIB_ARRAY_STRIDE);
-    oldVertexAttribArrayPointer = gl.getVertexAttribOffset(0, gl.VERTEX_ATTRIB_ARRAY_POINTER);
-  }
-  var oldActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
-  var oldTexture = gl.getParameter(gl.TEXTURE_BINDING_2D);
-
-  gl.useProgram(debugProgram);
-  gl.viewport(x, y, w, h);
-  gl.colorMask(true, true, true, true);
-  gl.disable(gl.DEPTH_TEST);
-  gl.disable(gl.BLEND);
-  gl.bindBuffer(gl.ARRAY_BUFFER, debugArrayBuffer);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  var loc = gl.getUniformLocation(debugProgram, "uSampler");
-  gl.uniform1i(loc, 0);
-  gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-  gl.useProgram(oldProgram);
-  gl.viewport.apply(gl, oldViewport);
-  gl.colorMask.apply(gl, oldColorWriteMask);
-  oldDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
-  oldBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
-  if (oldVertexAttribArrayEnabled) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, oldVertexAttribArrayBufferBinding);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0,
-                           oldVertexAttribArraySize,
-                           oldVertexAttribArrayType,
-                           oldVertexAttribArrayNormalized,
-                           oldVertexAttribArrayStride,
-                           oldVertexAttribArrayPointer);
-  } else {
-    gl.disableVertexAttribArray(0);
-  }
-  gl.bindBuffer(gl.ARRAY_BUFFER, oldArrayBuffer);
-  gl.activeTexture(oldActiveTexture);
-  gl.bindTexture(gl.TEXTURE_2D, oldTexture);
-}
-
 const g_query = parseQueryString(window.location.search);
 
 function isGpuOffloadingSupportEnabled() {
@@ -1088,19 +998,6 @@ function main() {
   if (g_debug) {
     gl = tdl.webgl.makeDebugContext(gl, undefined, LogGLCall);
   }
-  debugVertexShader = gl.createShader(gl.VERTEX_SHADER);
-  gl.shaderSource(debugVertexShader, debugVertexShaderSource);
-  gl.compileShader(debugVertexShader);
-  debugFragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-  gl.shaderSource(debugFragmentShader, debugFragmentShaderSource);
-  gl.compileShader(debugFragmentShader);
-  debugProgram = gl.createProgram();
-  gl.attachShader(debugProgram, debugVertexShader);
-  gl.attachShader(debugProgram, debugFragmentShader);
-  gl.linkProgram(debugProgram);
-  debugArrayBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, debugArrayBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, debugArrayBufferData, gl.STATIC_DRAW);
 
   initialize();
 }
