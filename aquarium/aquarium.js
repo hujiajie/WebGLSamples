@@ -1288,7 +1288,6 @@ function initialize() {
   initUIStuff();
   if (useGpuOffloading()) {
     g_fishPerFb = gl.createFramebuffer();
-    g_fishInfoBuffer = gl.createBuffer();
 
     var rects = initFishPerFbAttachments();
     var vertices = [];
@@ -1317,8 +1316,12 @@ function initialize() {
         vertices[ii].push(fishInfo.heightRange);
       }
     });
-    gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([].concat.apply([], vertices)), gl.STATIC_DRAW);
+    vertices = new Float32Array([].concat.apply([], vertices));
+    g_fishInfoBuffer = new tdl.buffers.Buffer({
+      numComponents: vertices.BYTES_PER_ELEMENT,
+      numElements: vertices.length,
+      buffer: new Uint8Array(vertices.buffer),
+    });
 
     g_fishPerProgram = createProgramFromTags('fishPerVertexShader', 'fishPerFragmentShader');
   }
@@ -1385,7 +1388,7 @@ function initialize() {
     lightRay.setProgram(lightRay.programSet.getProgram(shadingSettings));
   }
 
-  function render(projectionMatrix, viewInverseMatrix, useMultiview, pose) {
+  function render(viewport, projectionMatrix, viewInverseMatrix, useMultiview, pose) {
     var genericConstInUse = useMultiview ? genericConstMultiview : genericConst;
     var outsideConstInUse = useMultiview ? outsideConstMultiview : outsideConst;
     var innerConstInUse = useMultiview ? innerConstMultiview : innerConst;
@@ -1398,6 +1401,7 @@ function initialize() {
     ambient[1] = g.globals.ambientGreen;
     ambient[2] = g.globals.ambientBlue;
 
+    gl.viewport.apply(gl, viewport);
     gl.colorMask(true, true, true, true);
     gl.clearColor(0,0.8,1,0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
@@ -1517,8 +1521,12 @@ function initialize() {
           vertices[ii].push(fishInfo.heightRange);
         }
       });
-      gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([].concat.apply([], vertices)), gl.STATIC_DRAW);
+      vertices = new Float32Array([].concat.apply([], vertices));
+      g_fishInfoBuffer = new tdl.buffers.Buffer({
+        numComponents: vertices.BYTES_PER_ELEMENT,
+        numElements: vertices.length,
+        buffer: new Uint8Array(vertices.buffer),
+      });
       g_fishPerFbAttachmentsNeedUpdate = false;
     }
     if (g_randsNeedUpdate) {
@@ -1535,8 +1543,9 @@ function initialize() {
       var oldDepthTestCap = gl.isEnabled(gl.DEPTH_TEST);
       var oldBlendCap = gl.isEnabled(gl.BLEND);
       var oldScissorTestCap = gl.isEnabled(gl.SCISSOR_TEST);
-      var oldViewport = gl.getParameter(gl.VIEWPORT);
-      var oldFramebufferBinding = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      var oldViewport = viewport;
+      var oldFramebufferBinding = gl.getParameter(gl.FRAMEBUFFER_BINDING);  // Usually the binding is cached on the client side
+                                                                            // No big worry about round-trip here
 
       newDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
       newBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
@@ -1546,7 +1555,7 @@ function initialize() {
 
       var loc;
       var f = g.fish;
-      gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer);
+      gl.bindBuffer(gl.ARRAY_BUFFER, g_fishInfoBuffer.buffer());
       loc = g_fishPerProgram.attribLoc["position"];
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 40, 0);
@@ -1586,8 +1595,7 @@ function initialize() {
       g_fishPerProgram.setUniform("fishSpeedCoefficientMap", g_fishSpeedCoefficientMap);
       g_fishPerProgram.setUniform("fishScaleCoefficientMap", g_fishScaleCoefficientMap);
       g_fishPerProgram.setUniform("fishRadiusCoefficientMap", g_fishRadiusCoefficientMap);
-      var count = gl.getBufferParameter(gl.ARRAY_BUFFER, gl.BUFFER_SIZE) / 40;
-      gl.drawArrays(gl.TRIANGLES, 0, count);
+      gl.drawArrays(gl.TRIANGLES, 0, g_fishInfoBuffer.totalComponents() / 40);
 
       oldDepthTestCap ? gl.enable(gl.DEPTH_TEST) : gl.disable(gl.DEPTH_TEST);
       oldBlendCap ? gl.enable(gl.BLEND) : gl.disable(gl.BLEND);
@@ -1902,13 +1910,14 @@ function initialize() {
   }
 
   function renderStereo(leftProjectionMatrix, rightProjectionMatrix, viewInverseMatrix, pose) {
+    var viewport;
     if (useMultiviewForStereo()) {
       setupMultiviewFbIfNeeded();
       var halfWidth = Math.floor(canvas.width * 0.5);
       gl.bindFramebuffer(gl.FRAMEBUFFER, g_multiviewFb);
-      gl.viewport(0, 0, halfWidth, canvas.height);
+      viewport = [0, 0, halfWidth, canvas.height];
       gl.disable(gl.SCISSOR_TEST);
-      render([leftProjectionMatrix, rightProjectionMatrix], viewInverseMatrix, true, pose);
+      render(viewport, [leftProjectionMatrix, rightProjectionMatrix], viewInverseMatrix, true, pose);
 
       gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, g_multiviewViewFb[0]);
@@ -1916,14 +1925,14 @@ function initialize() {
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, g_multiviewViewFb[1]);
       gl.blitFramebuffer(0, 0, halfWidth, canvas.height, halfWidth, 0, canvas.width, canvas.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     } else { // not multiview
-      gl.viewport(0, 0, canvas.width * 0.5, canvas.height);
+      viewport = [0, 0, canvas.width * 0.5, canvas.height];
       gl.enable(gl.SCISSOR_TEST);
       gl.scissor(0, 0, canvas.width * 0.5, canvas.height);
-      render(leftProjectionMatrix, viewInverseMatrix, false, pose);
+      render(viewport, leftProjectionMatrix, viewInverseMatrix, false, pose);
 
-      gl.viewport(canvas.width * 0.5, 0, canvas.width * 0.5, canvas.height);
+      viewport = [canvas.width * 0.5, 0, canvas.width * 0.5, canvas.height];
       gl.scissor(canvas.width * 0.5, 0, canvas.width * 0.5, canvas.height);
-      render(rightProjectionMatrix, viewInverseMatrix, false, pose);
+      render(viewport, rightProjectionMatrix, viewInverseMatrix, false, pose);
     }
   }
 
@@ -1965,9 +1974,9 @@ function initialize() {
 
     setToCameraLookAt(viewInverseTemp);
 
+    var viewport = [0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight];
     gl.disable(gl.SCISSOR_TEST);
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    render(monoProjection, viewInverseTemp);
+    render(viewport, monoProjection, viewInverseTemp);
   }
 
   function onAnimationFrame() {
